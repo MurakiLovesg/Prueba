@@ -1,0 +1,150 @@
+# === CONFIGURACIÓN ===
+$root   = Get-Location
+$thumbs = Join-Path $root "miniaturas"
+$imgDir = Join-Path $root "img"
+$htmlBaseName = "catalogo"
+$porPagina = 10
+$logo = "novedad.jpg"
+
+# Datos de contacto
+$email = "adridbarents@gmail.com"
+$telefono = "34696330215"  # formato internacional sin + ni espacios
+
+Write-Host "📁 Carpeta actual: $root"
+Write-Host "🧹 Eliminando catálogos antiguos..."
+Get-ChildItem -Path $root -Filter "catalogo_*.html" -ErrorAction SilentlyContinue | Remove-Item -Force
+Remove-Item -Path (Join-Path $root "index.html") -ErrorAction SilentlyContinue
+
+# Comprobaciones básicas
+if (-not (Test-Path $thumbs)) { Write-Host "❌ Falta carpeta 'miniaturas'"; exit }
+if (-not (Test-Path $imgDir)) { Write-Host "❌ Falta carpeta 'img'"; exit }
+if (-not (Test-Path (Join-Path $root $logo))) { Write-Host "⚠ Falta archivo '$logo'"; exit }
+
+# === RECOGER MINIATURAS (detecta mayúsculas/minúsculas y varios formatos) ===
+$items = Get-ChildItem -Path $thumbs -File | Where-Object { $_.Extension -match '(?i)\.jpg$|\.jpeg$|\.png$' } | Sort-Object Name
+if ($items.Count -eq 0) { Write-Host "⚠ No se encontraron imágenes en miniaturas"; exit }
+Write-Host "📷 Imágenes encontradas: $($items.Count)"
+
+# === FUNCIÓN PARA CREAR PÁGINAS ===
+function Crear-Pagina($pagina, $imagenes, $totalPaginas, $email, $telefono) {
+$head = @"
+<!doctype html><html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pendientes Artesanales Marysol — Pág. $pagina</title>
+<style>
+  body{margin:0;font-family:system-ui,Arial;background:#111;color:#eee}
+  header{padding:16px 20px;font-size:1.4rem;font-weight:600;text-align:center}
+  .contact-bar{position:absolute;top:15px;right:25px;display:flex;gap:10px;font-size:0.9rem}
+  .contact-bar a{color:#0af;text-decoration:none;font-weight:600;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,0.08);transition:background 0.3s}
+  .contact-bar a:hover{background:rgba(255,255,255,0.2)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:10px 16px 30px}
+  .card{background:#181818;border-radius:10px;overflow:hidden;box-shadow:0 5px 15px rgba(0,0,0,.4)}
+  .card img{width:100%;aspect-ratio:1/1;object-fit:contain;background:#000;padding:4px;display:block;cursor:pointer}
+  .caption{padding:6px;font-size:12px;color:#bbb;text-align:center}
+  dialog{width:95vw;max-width:1200px;border:none;padding:0;background:transparent}
+  dialog::backdrop{background:rgba(0,0,0,.9)}
+  .lightbox{display:flex;justify-content:center;align-items:center;height:100vh}
+  .lightbox img{max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px}
+  .close{position:absolute;top:8px;right:8px;background:#000a;color:#fff;border:none;border-radius:10px;padding:8px 10px;cursor:pointer;font-size:14px}
+  .nav{text-align:center;padding:20px;font-size:1.1rem}
+  .nav a{color:#0af;text-decoration:none;margin:0 6px}
+  .nav span{color:#fff;font-weight:bold;margin:0 6px}
+</style></head><body>
+<div class="contact-bar">
+  <a href="mailto:$email">📧 Email</a>
+  <a href="https://wa.me/$telefono" target="_blank">💬 WhatsApp</a>
+</div>
+<header>Pendientes Artesanales Marysol — pág: $pagina</header>
+<div class="grid">
+"@
+
+$cards = ""
+foreach ($it in $imagenes) {
+    $thumbRel = "miniaturas/" + $it.Name
+    $base = [System.IO.Path]::GetFileNameWithoutExtension($it.Name)
+    $baseClean = $base -replace "_mini$","" -replace "_MINI$",""
+
+    $origCandidates = @(
+        "$baseClean.jpg","$baseClean.jpeg","$baseClean.png",
+        "$baseClean.JPG","$baseClean.JPEG","$baseClean.PNG"
+    ) | ForEach-Object { Join-Path $imgDir $_ }
+
+    $orig = ($origCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1)
+    if (-not $orig) { $orig = Join-Path $root $thumbRel }
+
+    $origRel = "img/" + [System.IO.Path]::GetFileName($orig)
+
+    $cards += @"
+  <div class="card">
+    <img src="$thumbRel" alt="$baseClean" onclick="openLb('$origRel')">
+    <div class="caption">$baseClean</div>
+  </div>
+"@
+}
+
+$nav = "<div class='nav'>"
+for ($p = 1; $p -le $totalPaginas; $p++) {
+    if ($p -eq $pagina) { $nav += "<span>$p</span>" } else { $nav += "<a href='catalogo_$p.html'>$p</a>" }
+}
+$nav += " | <a href='index.html'>Inicio</a></div>"
+
+$tail = @"
+</div>
+$nav
+<dialog id="lb"><div class="lightbox">
+<button class="close" onclick="document.getElementById('lb').close()">X</button>
+<img id="lbImg" src="" alt=""></div></dialog>
+<script>
+function openLb(src){const d=document.getElementById('lb');const img=document.getElementById('lbImg');img.src=src;d.showModal();}
+</script>
+</body></html>
+"@
+
+$nombreArchivo = "catalogo_$pagina.html"
+($head + $cards + $tail) | Out-File -FilePath (Join-Path $root $nombreArchivo) -Encoding utf8
+Write-Host "✅ Página $pagina creada: $nombreArchivo con $($imagenes.Count) imágenes"
+}
+
+# === CREAR TODAS LAS PÁGINAS ===
+$totalPaginas = [Math]::Ceiling($items.Count / $porPagina)
+Write-Host "📄 Total páginas: $totalPaginas"
+for ($i = 0; $i -lt $totalPaginas; $i++) {
+    $inicio = $i * $porPagina
+    $imagenes = $items[$inicio..([Math]::Min($inicio + $porPagina - 1, $items.Count - 1))]
+    Crear-Pagina ($i + 1) $imagenes $totalPaginas $email $telefono
+}
+
+# === CREAR INDEX PRINCIPAL (SIN ÍNDICE NUMÉRICO) ===
+$indexHTML = @"
+<!doctype html><html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pendientes Artesanales Marysol</title>
+<style>
+  body{margin:0;font-family:system-ui,Arial;background:linear-gradient(135deg,#0d0d0d,#202020);color:#eee;text-align:center;min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center}
+  h1{font-size:2rem;font-weight:700;letter-spacing:0.5px;margin-bottom:10px}
+  p{font-size:1.1rem;color:#bbb;max-width:600px;margin-bottom:30px}
+  img.logo{display:block;margin:30px auto;max-width:280px;border-radius:12px;box-shadow:0 0 20px rgba(0,0,0,0.5)}
+  .button{display:inline-block;background:#0af;color:white;padding:12px 26px;border-radius:8px;font-size:1.1rem;text-decoration:none;font-weight:600;transition:background 0.3s}
+  .button:hover{background:#09f}
+  .contact-bar{position:absolute;top:18px;right:25px;display:flex;gap:10px;font-size:0.95rem}
+  .contact-bar a{color:#0af;text-decoration:none;font-weight:600;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,0.08);transition:background 0.3s}
+  .contact-bar a:hover{background:rgba(255,255,255,0.2)}
+  footer{position:fixed;bottom:10px;font-size:0.8rem;color:#777}
+</style></head><body>
+<div class="contact-bar">
+  <a href="mailto:$email">📧 Email</a>
+  <a href="https://wa.me/$telefono" target="_blank">💬 WhatsApp</a>
+</div>
+<h1>Pendientes Artesanales Marysol</h1>
+<p>Descubre nuestras colecciones de pendientes artesanales, hechos a mano con amor y dedicación. Cada pieza es única, creada para resaltar tu estilo.</p>
+<a href="catalogo_1.html"><img src="$logo" alt="logo" class="logo"></a>
+<a href="catalogo_1.html" class="button">Ver catálogo completo</a>
+<footer>© 2025 Pendientes Artesanales Marysol</footer>
+</body></html>
+"@
+
+$indexHTML | Out-File -FilePath (Join-Path $root "index.html") -Encoding utf8
+Write-Host "✅ Índice creado sin lista numérica: index.html"
+Write-Host "🎉 Catálogo completo generado en: $root"
+
+Read-Host "Pulsa Enter para cerrar"
